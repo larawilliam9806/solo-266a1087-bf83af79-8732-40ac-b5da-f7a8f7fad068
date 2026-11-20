@@ -1,0 +1,19 @@
+services:
+  archive:
+    build: .
+    image: local-catalog-archive:latest
+    container_name: catalog-archive
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE: /data/archive.db
+      CATALOG_FILE: /data/catalog.json
+      # Comma-separated UTC dates whose queries should fail, to demo retries.
+      MOCK_FAIL_DATES: ${MOCK_FAIL_DATES:-}
+      SECRET_KEY: ${SECRET_KEY:-dev-only-change-me}
+    volumes:
+      - archive-data:/data
+    restart: unless-stopped
+
+volumes:
+  archive-data:

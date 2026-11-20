@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}任务 #{{ run['id'] }} · 历史地震目录归档{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="spread">
+    <div>
+      <h1>任务 #{{ run['id'] }}</h1>
+      <p class="muted">{{ run['start_date'] }} ~ {{ run['end_date'] }}（UTC）· 创建于 {{ run['created_at'] }}</p>
+    </div>
+    <div class="actions">
+      <form method="post" action="{{ url_for('run_collect', run_id=run['id']) }}">
+        <button type="submit">采集 / 重试</button>
+      </form>
+      {% if ready %}
+      <a class="button" href="{{ url_for('download_run', run_id=run['id']) }}">下载完整目录</a>
+      {% else %}
+      <span class="button disabled" title="所有日期查全或补档成功后才可下载">下载完整目录</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="stats">
+    {% for key, label in labels.items() %}
+      <div class="stat stat-{{ key }}">
+        <span class="num">{{ counts.get(key, 0) }}</span>
+        <span class="lbl">{{ label }}</span>
+      </div>
+    {% endfor %}
+  </div>
+
+  {% if ready %}
+  <p class="banner ok">全部日期已查全或补档成功，可下载完整目录。</p>
+  {% else %}
+  <p class="banner">逐日进度如下。请求失败的日期会在“采集 / 重试”时重试；已查全与待补档的日期不会重复请求。</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>逐日进度</h2>
+  <table class="days">
+    <thead>
+      <tr><th>UTC 日期</th><th>状态</th><th>条数</th><th>最近更新</th><th>说明 / 操作</th></tr>
+    </thead>
+    <tbody>
+      {% for day in days %}
+      <tr class="row-{{ day['status'] }}">
+        <td>{{ day['day'] }}</td>
+        <td><span class="badge badge-{{ day['status'] }}">{{ day['status'] | status_label }}</span></td>
+        <td>{{ day['event_count'] }}</td>
+        <td class="muted">{{ day['checked_at'] or '—' }}</td>
+        <td>
+          {% if day['status'] == 'failed' %}
+            <span class="err">{{ day['last_error'] or '请求失败' }}</span>
+          {% elif day['status'] == 'blocked' %}
+            <form method="post" enctype="multipart/form-data"
+                  action="{{ url_for('upload_day', run_id=run['id'], day=day['day']) }}"
+                  class="upload">
+              <input type="file" name="csv" accept=".csv,text/csv" required>
+              <button type="submit">上传全日 CSV</button>
+            </form>
+          {% elif day['status'] == 'complete' %}
+            <span class="muted">已归档</span>
+          {% else %}
+            <span class="muted">等待采集</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>已采事件（{{ events | length }} 条）</h2>
+  <details>
+    <summary>展开查看编号、UTC 发震时刻与震级</summary>
+    {% if events %}
+    <table>
+      <thead><tr><th>事件编号</th><th>UTC 发震时刻</th><th>震级</th><th>来源</th></tr></thead>
+      <tbody>
+        {% for event in events %}
+        <tr>
+          <td>{{ event['event_id'] }}</td>
+          <td>{{ event['utc_time'] }}</td>
+          <td>{{ '%g' | format(event['magnitude']) }}</td>
+          <td>{{ '补档 CSV' if event['source'] == 'csv' else '接口' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">尚无已采事件。</p>
+    {% endif %}
+  </details>
+</section>
+{% endblock %}

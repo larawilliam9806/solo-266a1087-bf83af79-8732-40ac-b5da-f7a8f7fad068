@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>新建归档任务</h1>
+  <p class="muted">选择最多 {{ max_span }} 个连续 UTC 日。采集时按日期段查询，段内未满 {{ page_size }} 条即视为整段查全。</p>
+  <form method="post" action="{{ url_for('create_run') }}" class="row">
+    <label>开始 UTC 日
+      <input type="date" name="start_date" required>
+    </label>
+    <label>结束 UTC 日
+      <input type="date" name="end_date" required>
+    </label>
+    <button type="submit">创建任务</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>归档任务</h2>
+  {% if runs %}
+  <table>
+    <thead>
+      <tr><th>#</th><th>日期范围</th><th>创建时间</th><th>已查全</th><th>待补档</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td>{{ run['id'] }}</td>
+        <td>{{ run['start_date'] }} ~ {{ run['end_date'] }}</td>
+        <td>{{ run['created_at'] }}</td>
+        <td>{{ run['complete_days'] }}</td>
+        <td>{{ run['blocked_days'] }}</td>
+        <td><a href="{{ url_for('run_detail', run_id=run['id']) }}">查看</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">还没有任务。</p>
+  {% endif %}
+</section>
+{% endblock %}

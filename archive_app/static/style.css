@@ -122,3 +122,16 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
 details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
 details[open] summary { margin-bottom: 10px; }
 a { color: var(--accent); }
+.nav { display: flex; gap: 16px; margin-left: auto; margin-right: 18px; }
+.nav a { color: #c7d0dc; text-decoration: none; font-size: 13px; }
+.nav a:hover { color: #fff; }
+select {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font: inherit;
+  background: #fff;
+  max-width: 100%;
+}
+button.danger { background: var(--bad); }
+.submit-row { margin-top: 14px; }

@@ -8,16 +8,30 @@
       <p class="muted">{{ run['start_date'] }} ~ {{ run['end_date'] }}（UTC）· 创建于 {{ run['created_at'] }}</p>
     </div>
     <div class="actions">
+      {% if cleaned %}
+        <span class="button disabled">任务已清理</span>
+      {% else %}
       <form method="post" action="{{ url_for('run_collect', run_id=run['id']) }}">
         <button type="submit">采集 / 重试</button>
       </form>
+      {% endif %}
       {% if ready %}
       <a class="button" href="{{ url_for('download_run', run_id=run['id']) }}">下载完整目录</a>
       {% else %}
       <span class="button disabled" title="所有日期查全或补档成功后才可下载">下载完整目录</span>
       {% endif %}
+      {% if all_published %}
+      <form method="post" action="{{ url_for('run_cleanup', run_id=run['id']) }}"
+            onsubmit="return confirm('清理后该任务不能再作为新版本的来源，确定清理进度和事件？');">
+        <button type="submit" class="danger">清理进度和事件</button>
+      </form>
+      {% endif %}
     </div>
   </div>
+
+  {% if cleaned %}
+  <p class="banner">该任务的进度与事件已在 {{ run['cleaned_at'] }} 清理，不能再作为新版本的来源；已发布版本仍可查询。</p>
+  {% endif %}
 
   <div class="stats">
     {% for key, label in labels.items() %}
@@ -28,15 +42,30 @@
     {% endfor %}
   </div>
 
-  {% if ready %}
-  <p class="banner ok">全部日期已查全或补档成功，可下载完整目录。</p>
+  {% if cleaned %}
+  <p class="banner">逐日进度已清空。已发布版本的内容与逐日来源不受影响。</p>
+  {% elif ready %}
+  <p class="banner ok">
+    全部日期已查全或补档成功，可下载完整目录。
+    {% if all_published %}每一天都已以本任务为来源发布过，可清理进度和事件。{% else %}每一天都发布过之后才可清理本任务的进度和事件。{% endif %}
+  </p>
   {% else %}
   <p class="banner">逐日进度如下。请求失败的日期会在“采集 / 重试”时重试；已查全与待补档的日期不会重复请求。</p>
   {% endif %}
 </section>
 
+{% if published %}
+<section class="card">
+  <h2>已作为来源发布的日期（{{ published | length }} 天）</h2>
+  <p class="muted">{{ published | join('、') }}</p>
+</section>
+{% endif %}
+
 <section class="card">
   <h2>逐日进度</h2>
+  {% if cleaned %}
+  <p class="muted">进度与事件已清理。可查询仍保留的已发布版本。</p>
+  {% else %}
   <table class="days">
     <thead>
       <tr><th>UTC 日期</th><th>状态</th><th>条数</th><th>最近更新</th><th>说明 / 操作</th></tr>
@@ -68,6 +97,7 @@
       {% endfor %}
     </tbody>
   </table>
+  {% endif %}
 </section>
 
 <section class="card">

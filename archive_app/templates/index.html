@@ -1,6 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="card">
+  <h1>发布月度目录版本</h1>
+  <p class="muted">选择最多 {{ max_span }} 个连续 UTC 日，再为每天指定一个已查全的来源任务。</p>
+  <form method="get" action="{{ url_for('version_new') }}" class="row">
+    <label>开始 UTC 日
+      <input type="date" name="start_date" required>
+    </label>
+    <label>结束 UTC 日
+      <input type="date" name="end_date" required>
+    </label>
+    <button type="submit">选择逐日来源</button>
+    <a href="{{ url_for('version_list') }}">查看已发布版本</a>
+  </form>
+</section>
+
+<section class="card">
   <h1>新建归档任务</h1>
   <p class="muted">选择最多 {{ max_span }} 个连续 UTC 日。采集时按日期段查询，段内未满 {{ page_size }} 条即视为整段查全。</p>
   <form method="post" action="{{ url_for('create_run') }}" class="row">
@@ -19,7 +34,7 @@
   {% if runs %}
   <table>
     <thead>
-      <tr><th>#</th><th>日期范围</th><th>创建时间</th><th>已查全</th><th>待补档</th><th></th></tr>
+      <tr><th>#</th><th>日期范围</th><th>创建时间</th><th>已查全</th><th>待补档</th><th>状态</th><th></th></tr>
     </thead>
     <tbody>
       {% for run in runs %}
@@ -29,6 +44,7 @@
         <td>{{ run['created_at'] }}</td>
         <td>{{ run['complete_days'] }}</td>
         <td>{{ run['blocked_days'] }}</td>
+        <td>{% if run['cleaned_at'] %}<span class="badge">已清理</span>{% else %}<span class="badge badge-complete">使用中</span>{% endif %}</td>
         <td><a href="{{ url_for('run_detail', run_id=run['id']) }}">查看</a></td>
       </tr>
       {% endfor %}

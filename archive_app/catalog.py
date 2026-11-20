@@ -158,7 +158,8 @@ CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     start_date TEXT NOT NULL,
     end_date TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    cleaned_at TEXT
 );
 CREATE TABLE IF NOT EXISTS day_status (
     run_id INTEGER NOT NULL,
@@ -181,7 +182,40 @@ CREATE TABLE IF NOT EXISTS events (
     FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_events_day ON events(run_id, day);
+CREATE TABLE IF NOT EXISTS versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS version_days (
+    version_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    run_id INTEGER NOT NULL,
+    run_start TEXT NOT NULL,
+    run_end TEXT NOT NULL,
+    event_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (version_id, day),
+    FOREIGN KEY (version_id) REFERENCES versions(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS version_events (
+    version_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    utc_time TEXT NOT NULL,
+    magnitude REAL NOT NULL,
+    source_run_id INTEGER NOT NULL,
+    PRIMARY KEY (version_id, event_id),
+    FOREIGN KEY (version_id) REFERENCES versions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_version_events_day ON version_events(version_id, day);
+CREATE INDEX IF NOT EXISTS idx_version_days_run ON version_days(run_id, day);
 """
+
+# Columns added after the first release; ``init`` applies them to old databases.
+MIGRATIONS = {
+    "runs": {"cleaned_at": "TEXT"},
+}
 
 STATUS_PENDING = "pending"
 STATUS_COMPLETE = "complete"   # day is fully archived
@@ -211,6 +245,11 @@ class Store:
     def init(self) -> None:
         with self._lock, self.connect() as conn:
             conn.executescript(SCHEMA)
+            for table, columns in MIGRATIONS.items():
+                existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+                for name, decl in columns.items():
+                    if name not in existing:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
     # -- runs ---------------------------------------------------------
 
@@ -416,3 +455,209 @@ class Store:
                 "SELECT COUNT(*) FROM day_status WHERE run_id=?", (run_id,)
             ).fetchone()[0]
             return total > 0 and bad == 0
+
+    # -- published versions -------------------------------------------
+
+    def publish_version(
+        self,
+        sources: dict[str, int],
+        verify=None,
+    ) -> int:
+        """Snapshot one source run per day into an immutable published version.
+
+        ``sources`` maps every UTC day of the (contiguous) version to the run
+        that supplies it.  The snapshot copies events so later cleanup of those
+        runs cannot change what was published.  ``verify`` receives the rows
+        about to be published and may raise to abort; nothing is written then.
+        """
+        if not sources:
+            raise ValueError("未选择任何日期")
+        days = sorted(sources)
+        first = dt.date.fromisoformat(days[0])
+        last = dt.date.fromisoformat(days[-1])
+        if len(days) != (last - first).days + 1:
+            raise ValueError("发布范围必须是连续日期")
+        with self._lock, self.connect() as conn:
+            try:
+                # Take the write lock before reading: a concurrent cleanup or
+                # publish must not change source state between our checks and
+                # the snapshot we write.
+                conn.execute("BEGIN IMMEDIATE")
+                run_rows: dict[int, sqlite3.Row] = {}
+                day_rows: dict[str, sqlite3.Row] = {}
+                for day in days:
+                    run_id = sources[day]
+                    run = run_rows.get(run_id)
+                    if run is None:
+                        run = conn.execute(
+                            "SELECT * FROM runs WHERE id=?", (run_id,)
+                        ).fetchone()
+                        if run is None:
+                            raise ValueError(f"任务 #{run_id} 不存在")
+                        if run["cleaned_at"] is not None:
+                            raise ValueError(f"任务 #{run_id} 已清理，不能再作为来源")
+                        run_rows[run_id] = run
+                    if not (run["start_date"] <= day <= run["end_date"]):
+                        raise ValueError(f"任务 #{run_id} 不包含 {day}")
+                    row = conn.execute(
+                        "SELECT * FROM day_status WHERE run_id=? AND day=?",
+                        (run_id, day),
+                    ).fetchone()
+                    if row is None or row["status"] != STATUS_COMPLETE:
+                        raise ValueError(f"任务 #{run_id} 的 {day} 尚未查全")
+                    events = conn.execute(
+                        "SELECT event_id, utc_time, magnitude FROM events "
+                        "WHERE run_id=? AND day=? ORDER BY utc_time, event_id",
+                        (run_id, day),
+                    ).fetchall()
+                    if len(events) != row["event_count"]:
+                        raise ValueError(f"任务 #{run_id} 的 {day} 事件数与进度不符")
+                    day_rows[day] = row
+                    for event in events:
+                        if event["utc_time"][:10] != day:
+                            raise ValueError(
+                                f"任务 #{run_id} 中事件 {event['event_id']} 不属于 {day}"
+                            )
+
+                if verify is not None:
+                    verify(conn, sources, day_rows)
+
+                now = dt.datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+                cur = conn.execute(
+                    "INSERT INTO versions(start_date, end_date, created_at) VALUES (?,?,?)",
+                    (days[0], days[-1], now),
+                )
+                version_id = int(cur.lastrowid)
+                for day in days:
+                    run_id = sources[day]
+                    run = run_rows[run_id]
+                    conn.execute(
+                        "INSERT INTO version_days(version_id, day, run_id, run_start, "
+                        "run_end, event_count) VALUES (?,?,?,?,?,?)",
+                        (
+                            version_id,
+                            day,
+                            run_id,
+                            run["start_date"],
+                            run["end_date"],
+                            day_rows[day]["event_count"],
+                        ),
+                    )
+                    conn.executemany(
+                        "INSERT INTO version_events(version_id, day, event_id, utc_time, "
+                        "magnitude, source_run_id) VALUES (?,?,?,?,?,?)",
+                        [
+                            (
+                                version_id,
+                                day,
+                                event["event_id"],
+                                event["utc_time"],
+                                event["magnitude"],
+                                run_id,
+                            )
+                            for event in conn.execute(
+                                "SELECT event_id, utc_time, magnitude FROM events "
+                                "WHERE run_id=? AND day=? ORDER BY utc_time, event_id",
+                                (run_id, day),
+                            ).fetchall()
+                        ],
+                    )
+            except Exception:
+                conn.rollback()
+                raise
+            conn.commit()
+            return version_id
+
+    def versions(self) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT v.*, "
+                "(SELECT COUNT(*) FROM version_days d WHERE d.version_id=v.id) AS day_count, "
+                "(SELECT COUNT(*) FROM version_events e WHERE e.version_id=v.id) AS event_count "
+                "FROM versions v ORDER BY v.id DESC"
+            ).fetchall()
+
+    def get_version(self, version_id: int) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT * FROM versions WHERE id=?", (version_id,)
+            ).fetchone()
+
+    def version_days(self, version_id: int) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT * FROM version_days WHERE version_id=? ORDER BY day",
+                (version_id,),
+            ).fetchall()
+
+    def version_events(
+        self, version_id: int, day: str | None = None
+    ) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            if day is None:
+                return conn.execute(
+                    "SELECT * FROM version_events WHERE version_id=? "
+                    "ORDER BY utc_time, event_id",
+                    (version_id,),
+                ).fetchall()
+            return conn.execute(
+                "SELECT * FROM version_events WHERE version_id=? AND day=? "
+                "ORDER BY utc_time, event_id",
+                (version_id, day),
+            ).fetchall()
+
+    # -- cleanup ------------------------------------------------------
+
+    def cleanup_run(self, run_id: int) -> None:
+        """Drop a run's progress and events once every day was published.
+
+        Every day of the run must have been published (across any number of
+        versions) with this run as its source.  The run row itself stays, marked
+        ``cleaned_at``, so it can no longer supply a future version.
+        """
+        with self._lock, self.connect() as conn:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                run = conn.execute(
+                    "SELECT * FROM runs WHERE id=?", (run_id,)
+                ).fetchone()
+                if run is None:
+                    raise KeyError(run_id)
+                if run["cleaned_at"] is not None:
+                    raise ValueError(f"任务 #{run_id} 已清理")
+                published = {
+                    row["day"]
+                    for row in conn.execute(
+                        "SELECT DISTINCT day FROM version_days WHERE run_id=?", (run_id,)
+                    )
+                }
+                day = dt.date.fromisoformat(run["start_date"])
+                end = dt.date.fromisoformat(run["end_date"])
+                missing = []
+                while day <= end:
+                    if day.isoformat() not in published:
+                        missing.append(day.isoformat())
+                    day += dt.timedelta(days=1)
+                if missing:
+                    raise ValueError(
+                        "以下日期尚未以该任务为来源发布: " + ", ".join(missing)
+                    )
+                conn.execute("DELETE FROM events WHERE run_id=?", (run_id,))
+                conn.execute("DELETE FROM day_status WHERE run_id=?", (run_id,))
+                conn.execute(
+                    "UPDATE runs SET cleaned_at=? WHERE id=?",
+                    (dt.datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), run_id),
+                )
+            except Exception:
+                conn.rollback()
+                raise
+            conn.commit()
+
+    def run_published_days(self, run_id: int) -> set[str]:
+        with self.connect() as conn:
+            return {
+                row["day"]
+                for row in conn.execute(
+                    "SELECT day FROM version_days WHERE run_id=?", (run_id,)
+                )
+            }

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}已发布版本 · 历史地震目录归档{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="spread">
+    <div>
+      <h1>已发布版本</h1>
+      <p class="muted">每个版本的内容与逐日来源在任务清理和重启后保持不变。</p>
+    </div>
+    <div class="actions">
+      <a class="button" href="{{ url_for('index') }}">新建发布</a>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  {% if versions %}
+  <table>
+    <thead>
+      <tr><th>版本</th><th>日期范围</th><th>天数</th><th>事件数</th><th>发布时间</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for version in versions %}
+      <tr>
+        <td>v{{ version['id'] }}</td>
+        <td>{{ version['start_date'] }} ~ {{ version['end_date'] }}</td>
+        <td>{{ version['day_count'] }}</td>
+        <td>{{ version['event_count'] }}</td>
+        <td class="muted">{{ version['created_at'] }}</td>
+        <td>
+          <a href="{{ url_for('version_detail', version_id=version['id']) }}">查看</a>
+          ·
+          <a href="{{ url_for('version_download', version_id=version['id']) }}">CSV</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">还没有已发布的版本。</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}发布月度版本 · 历史地震目录归档{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>发布月度版本</h1>
+  <p class="muted">
+    为 {{ start }} ~ {{ end }} 的每个 UTC 日指定一个来源任务。只有所选来源在该日已查全（含零事件）
+    才能发布；同一事件编号出现在不同日期时整版拒绝发布。
+  </p>
+  <form method="post" action="{{ url_for('version_publish') }}">
+    <input type="hidden" name="start_date" value="{{ start }}">
+    <input type="hidden" name="end_date" value="{{ end }}">
+    <table class="days">
+      <thead>
+        <tr><th>UTC 日期</th><th>来源任务（该日事件数）</th></tr>
+      </thead>
+      <tbody>
+        {% for day in days %}
+        <tr class="{{ 'row-failed' if not candidates[day] else '' }}">
+          <td>{{ day }}<input type="hidden" name="day" value="{{ day }}"></td>
+          <td>
+            {% if candidates[day] %}
+            <select name="source_{{ day }}">
+              {% for option in candidates[day] %}
+              <option value="{{ option.run_id }}">
+                任务 #{{ option.run_id }}（{{ option.range }}）· {{ option.event_count }} 条
+              </option>
+              {% endfor %}
+            </select>
+            {% else %}
+            <span class="err">没有已查全的来源任务，无法发布该日</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="actions submit-row">
+      <button type="submit">发布版本</button>
+      <a href="{{ url_for('version_list') }}">返回版本列表</a>
+    </div>
+  </form>
+</section>
+
+{% if downloads %}
+<section class="card">
+  <h2>已查全的任务目录</h2>
+  <p class="muted">也可以先下载单个任务的完整目录核对后再发布。</p>
+  <ul>
+    {% for item in downloads %}
+    <li><a href="{{ url_for('download_run', run_id=item.run_id) }}">任务 #{{ item.run_id }}（{{ item.range }}）</a></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock %}
